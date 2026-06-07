@@ -1,22 +1,25 @@
 # Person ReID System Requirements
 # Install with: pip install -r requirements.txt
-# Versions are pinned for reproducible builds. Adjust torch / onnxruntime-gpu to
+# The numpy/opencv/onnxruntime/faiss/torch/ultralytics stack uses lower-bound
+# (>=) ranges so pip can resolve a mutually compatible set. Exact == pins on
+# these had become mutually unsatisfiable (ResolutionImpossible) -- e.g.
+# numpy==2.2.6 vs opencv-python==4.12.0.88. Adjust torch / onnxruntime-gpu to
 # match your CUDA toolkit if needed (use onnxruntime instead of -gpu for CPU).
 
 # Core dependencies
-numpy==2.2.6
-opencv-python==4.12.0.88
+numpy>=2.2.6
+opencv-python>=4.12.0
 
 # Face Recognition
 onnx==1.19.1
-onnxruntime-gpu==1.23.0  # Use onnxruntime (CPU build) if you have no NVIDIA GPU
-faiss-cpu==1.12.0
+onnxruntime-gpu>=1.23.0  # Use onnxruntime (CPU build) if you have no NVIDIA GPU
+faiss-cpu>=1.12.0
 scikit-image==0.25.2
 
 # Gait Recognition (OpenGait)
-torch==2.7.1
-torchvision==0.22.1
-torchaudio==2.7.1
+torch>=2.7.1
+torchvision>=0.22.1
+torchaudio>=2.7.1
 tqdm==4.67.1
 pyyaml==6.0.3
 tensorboard==2.20.0
@@ -25,7 +28,7 @@ einops==0.8.1
 py7zr==1.0.0
 
 # Person Detection
-ultralytics==8.3.0  # YOLOv8 for full person detection
+ultralytics>=8.0.0  # YOLOv8 for full person detection
 
 # 3D Mesh Export
 trimesh==4.0.0
