@@ -65,7 +65,9 @@ merge_time_window = 10.0
 
 [anti_spoofing]
 # Enable/disable liveness detection (gates person registration)
-enabled = true
+# Disabled by default: the production deployment does not ship the
+# antispoof_minifas.onnx weight, so enabling it would crash at startup.
+enabled = false
 
 # ONNX model file in face-reidentification/weights/
 model = antispoof_minifas.onnx

@@ -44,16 +44,23 @@ def hf_download(filename: str, dest_dir: Path) -> Path:
     return path
 
 
+RAW_PTH_PATH = WEIGHTS_DIR / 'epoch_20.pth'
+
+
 def download_weights() -> None:
-    if PTH_PATH.exists():
+    if PTH_PATH.exists() and RAW_PTH_PATH.exists():
         print(f'Checkpoint already present: {PTH_PATH}')
         return
     print('Downloading Deep3DFaceRecon checkpoint...')
     src = hf_download('epoch_20.pth', WEIGHTS_DIR)
-    if src != PTH_PATH:
-        import shutil
-        shutil.move(str(src), str(PTH_PATH))
-    print(f'  Saved as {PTH_PATH}')
+    import shutil
+    # Keep the raw epoch_20.pth name (the production pod ships both names)
+    if src != RAW_PTH_PATH:
+        shutil.move(str(src), str(RAW_PTH_PATH))
+    # Provide the deep3d_recon_epoch20.pth alias used by setup/export here.
+    if not PTH_PATH.exists():
+        shutil.copyfile(str(RAW_PTH_PATH), str(PTH_PATH))
+    print(f'  Saved as {RAW_PTH_PATH} and {PTH_PATH}')
 
 
 def download_bfm() -> None:
@@ -329,8 +336,24 @@ def export_onnx(model) -> None:
         output_names=['output'],
         opset_version=17,
         dynamic_axes={'input': {0: 'batch'}, 'output': {0: 'batch'}},
+        dynamo=False,  # use legacy TorchScript exporter (no onnxscript dep)
     )
-    print(f'  Exported: {ONNX_PATH.stat().st_size / 1e6:.1f} MB')
+    # Re-save with external data so the heavy ResNet50 weights live in a
+    # sidecar .data file (matches the known-good production layout:
+    # deep3d_recon.onnx ~0.3 MB + deep3d_recon.onnx.data ~96 MB).
+    import onnx
+    from onnx.external_data_helper import convert_model_to_external_data
+    m = onnx.load(str(ONNX_PATH))
+    data_name = ONNX_PATH.name + '.data'
+    data_path = ONNX_PATH.parent / data_name
+    if data_path.exists():
+        data_path.unlink()
+    convert_model_to_external_data(
+        m, all_tensors_to_one_file=True, location=data_name,
+        size_threshold=1024, convert_attribute=False)
+    onnx.save(m, str(ONNX_PATH))
+    print(f'  Exported: {ONNX_PATH.stat().st_size / 1e6:.2f} MB '
+          f'+ {data_path.name} {data_path.stat().st_size / 1e6:.1f} MB')
 
 
 def extract_bfm_basis() -> None:

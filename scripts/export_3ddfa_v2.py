@@ -93,8 +93,26 @@ def export_onnx(repo_dir: Path, work_dir: Path):
         input_names=['input'],
         output_names=['output'],
         do_constant_folding=True,
-        opset_version=11
+        opset_version=11,
+        dynamo=False,  # use legacy TorchScript exporter (no onnxscript dep)
     )
+
+    # Re-save with external data so the MobileNet weights live in a sidecar
+    # .data file (matches production layout: 3ddfa_v2.onnx ~0.1 MB +
+    # 3ddfa_v2.onnx.data ~13 MB).
+    import onnx
+    from onnx.external_data_helper import convert_model_to_external_data
+    m = onnx.load(str(onnx_path))
+    data_name = onnx_path.name + ".data"
+    data_path = onnx_path.parent / data_name
+    if data_path.exists():
+        data_path.unlink()
+    convert_model_to_external_data(
+        m, all_tensors_to_one_file=True, location=data_name,
+        size_threshold=1024, convert_attribute=False)
+    onnx.save(m, str(onnx_path))
+    print(f"  external data: {data_path.name} "
+          f"{data_path.stat().st_size / 1e6:.1f} MB")
 
     # Verify
     import onnxruntime

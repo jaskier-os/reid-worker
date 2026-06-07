@@ -21,6 +21,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxrender-dev \
     libgomp1 \
     curl \
+    git \
     && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.12 \
     && ln -sf /usr/bin/python3.12 /usr/bin/python \
     && ln -sf /usr/bin/python3.12 /usr/bin/python3 \
@@ -31,6 +32,15 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --ignore-installed -r requirements.txt
 
 COPY . .
+
+# Fetch + export ALL model weights at build time (not committed to git):
+#   - YOLOv8n person detector (yolov8n.pt at /app)
+#   - SCRFD face detectors + ArcFace recognizers (det_*, w600k_*)
+#   - Deep3DFaceRecon (epoch_20.pth, deep3d_recon_epoch20.pth, deep3d_recon.onnx
+#     + .onnx.data, deep3d_recon.npz, BFM_Fitting/)
+#   - 3DDFA_V2 (3ddfa_v2.onnx + .onnx.data + .npz)
+# Deps (torch, onnx, huggingface_hub) come from requirements.txt installed above.
+RUN bash fetch_models.sh --3d
 
 RUN python -c "from ultralytics import YOLO; YOLO('yolov8n.pt')"
 

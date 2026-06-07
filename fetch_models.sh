@@ -50,8 +50,7 @@ if [ "$WANT_3D" -eq 1 ]; then
   # then exports the ONNX graphs. Requires: pip install huggingface_hub
   python scripts/setup_deep3d.py
   echo "[fetch_models] Exporting 3DDFA_V2 ONNX..."
-  python scripts/export_3ddfa_v2.py || \
-    echo "  (3ddfa export skipped/failed - see scripts/export_3ddfa_v2.py for sources)"
+  python scripts/export_3ddfa_v2.py
 fi
 
 if [ "$WANT_GAIT" -eq 1 ]; then
