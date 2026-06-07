@@ -1,0 +1,102 @@
+[database]
+# All database access goes through the reid-db-handler API. The worker NEVER
+# connects to PostgreSQL directly. Set enabled = false to run with a local
+# on-disk FAISS index instead of the centralized API.
+enabled = true
+# Base URL of the reid-db-handler API (no trailing slash).
+api_url = http://localhost:9285
+# API key for the reid-db-handler API. Generate one on the reid-db-handler side
+# and paste it here. DO NOT commit a real key.
+api_key = CHANGE_ME_REID_DB_HANDLER_API_KEY
+# Optional analytics endpoint URL. Leave as-is if you do not run analytics.
+analytics_url = http://localhost:3400
+
+[person_detection]
+# Enable/disable full body detection
+enabled = true
+
+# YOLOv8 model variant (nano/small/medium/large/extra)
+# nano (yolov8n.pt) - Fastest, 3-5ms per frame, good for real-time
+# small (yolov8s.pt) - Balanced, 5-8ms per frame
+# medium (yolov8m.pt) - Better accuracy, 10-15ms per frame
+# large (yolov8l.pt) - High accuracy, 20-30ms per frame
+# extra (yolov8x.pt) - Best accuracy, 40-60ms per frame
+model = yolov8n.pt
+
+# Detection confidence threshold (0.0-1.0)
+confidence = 0.25
+
+# Image size for inference (pixels, default: 640)
+imgsz = 640
+
+[face_detection]
+# SCRFD face detection model
+# det_10g.onnx - 10G parameter model (default, balanced)
+# det_2.5g.onnx - 2.5G parameter model (faster, less accurate)
+# det_500m.onnx - 500M parameter model (fastest, basic)
+model = det_10g.onnx
+
+# Detection confidence threshold (0.0-1.0)
+confidence = 0.5
+
+# IoU threshold for non-maximum suppression
+iou_threshold = 0.4
+
+[face_recognition]
+# ArcFace recognition model
+# w600k_r50.onnx - ResNet-50, 512-dim (default, balanced)
+# w600k_r34.onnx - ResNet-34, 512-dim (faster, less accurate)
+# w600k_r18.onnx - ResNet-18, 512-dim (fastest, basic)
+recognition_model = face-reidentification/weights/w600k_r50.onnx
+
+# Similarity threshold for matching (0.0-1.0)
+similarity_threshold = 0.4
+
+# Minimum samples before auto-registering unknown person
+min_samples = 5
+
+[person_tracking]
+# Auto-merge settings for handling face occlusions
+# Similarity threshold for auto-merge (0.0-1.0)
+auto_merge_threshold = 0.85
+
+# Time window for considering merge (seconds)
+merge_time_window = 10.0
+
+[anti_spoofing]
+# Enable/disable liveness detection (gates person registration)
+enabled = true
+
+# ONNX model file in face-reidentification/weights/
+model = antispoof_minifas.onnx
+
+# Liveness threshold (0.0-1.0). Scores below this are rejected as spoof.
+threshold = 0.5
+
+[face_3d]
+# Enable/disable 3D face reconstruction at registration time
+enabled = false
+
+# ONNX model file in face-reidentification/weights/
+# Optional companion .npz with BFM basis (same stem, e.g. 3ddfa_v2.npz)
+model = 3ddfa_v2.onnx
+
+# Device for inference (cuda or cpu)
+device = cuda
+
+# Output format (glb or gltf)
+output_format = glb
+
+[performance]
+# Process every Nth frame (frame skip for performance)
+# 1 = process every frame (slowest, most accurate)
+# 2 = process every other frame
+# 3 = process every third frame (faster)
+frame_skip = 1
+
+# Maximum frames to queue per camera
+max_queue_size = 2
+
+[system]
+debug = false
+log_level = INFO

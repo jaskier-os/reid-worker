@@ -1,0 +1,46 @@
+# Person ReID System Requirements
+# Install with: pip install -r requirements.txt
+# Versions are pinned for reproducible builds. Adjust torch / onnxruntime-gpu to
+# match your CUDA toolkit if needed (use onnxruntime instead of -gpu for CPU).
+
+# Core dependencies
+numpy==2.2.6
+opencv-python==4.12.0.88
+
+# Face Recognition
+onnx==1.19.1
+onnxruntime-gpu==1.23.0  # Use onnxruntime (CPU build) if you have no NVIDIA GPU
+faiss-cpu==1.12.0
+scikit-image==0.25.2
+
+# Gait Recognition (OpenGait)
+torch==2.7.1
+torchvision==0.22.1
+torchaudio==2.7.1
+tqdm==4.67.1
+pyyaml==6.0.3
+tensorboard==2.20.0
+kornia==0.8.1
+einops==0.8.1
+py7zr==1.0.0
+
+# Person Detection
+ultralytics==8.3.0  # YOLOv8 for full person detection
+
+# 3D Mesh Export
+trimesh==4.0.0
+
+# 3D face weight download (used by scripts/setup_deep3d.py)
+huggingface_hub==0.26.2
+
+# HTTP client
+requests==2.32.0
+
+# Utilities
+pillow==11.3.0
+scipy==1.16.2
+
+# HTTP Server for stream endpoint
+flask==3.1.0
+flask-cors==5.0.0
+waitress==3.0.0

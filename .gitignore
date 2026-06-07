@@ -1,0 +1,51 @@
+# Secrets / local config
+config.ini
+.env
+.env.local
+.env.*.local
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Model weights (fetched via fetch_models.sh / setup scripts, never committed)
+yolov8*.pt
+face-reidentification/weights/*.onnx
+face-reidentification/weights/*.onnx.data
+face-reidentification/weights/*.npz
+face-reidentification/weights/*.pth
+face-reidentification/weights/*.pt
+face-reidentification/weights/BFM_Fitting/
+face-reidentification/weights/.cache/
+OpenGait/output/
+OpenGait/pretrained_*.zip
+OpenGait/datasets/*/[0-9]*/
+
+# Runtime data
+pending_db/
+database/face_database/
+*.faiss
+faiss_index.bin
+
+# Captures / debug artifacts
+screenshot_*.jpg
+*.mp4
+stream_server.py.backup
+
+# Editor / OS
+.idea/
+.vscode/
+.DS_Store
+*.log
