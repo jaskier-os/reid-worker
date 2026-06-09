@@ -39,6 +39,10 @@ database/face_database/
 *.faiss
 faiss_index.bin
 
+# Vendored sub-project demo assets (upstream demo media, not committed here)
+OpenGait/assets/*.gif
+face-reidentification/assets/faces/
+
 # Captures / debug artifacts
 screenshot_*.jpg
 *.mp4
