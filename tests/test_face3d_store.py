@@ -10,6 +10,7 @@ from src.face3d_store import (
     Face3DAccumulator, FrameRecord, pack_frames, unpack_frames,
     EMBEDDING_DIM, PARAMS_DIM, SCHEMA_VERSION,
 )
+from src.db_client import PersonNotFoundError
 
 
 def _rec(yaw, q=1.0, cam="stream:cam1"):
@@ -173,6 +174,70 @@ def test_build_failure_leaves_counter():
     print("PASS build failure leaves last_built_at_count unchanged (retries next step)")
 
 
+def test_person_gone_evicts_and_calls_back():
+    """A 404 on persist (PersonNotFoundError) must evict the in-RAM state and fire
+    the on_person_gone callback with the right db id, without raising."""
+
+    class GoneDB(_FakeDB):
+        def put_face3d_frames(self, person_id, fc, lbac, sv, b64):
+            raise PersonNotFoundError(person_id)
+
+    acc = Face3DAccumulator(min_samples=50, refine_interval=50, max_frames=300)
+    rec = _FakeReconstructor()
+    db = GoneDB()
+    pid = "gone-person"
+    gone = []
+
+    # Below build threshold so this exercises the persist() path specifically.
+    for _ in range(3):
+        acc.add(pid, np.random.randn(EMBEDDING_DIM), 0.0, 0.0, 0.0,
+                quality=1.0, camera_id="c", params=np.random.randn(PARAMS_DIM))
+    assert pid in acc._people, "precondition: person present before persist"
+
+    # Must not raise.
+    acc.persist(pid, db, force=True, on_person_gone=lambda i: gone.append(i))
+
+    assert gone == [pid], f"callback not invoked with db id: {gone}"
+    assert pid not in acc._people, "in-RAM state not evicted after 404"
+    print("PASS person-gone (404) evicts in-RAM state and fires on_person_gone callback")
+
+
+def test_person_gone_via_accumulate_never_raises():
+    """The accumulate entrypoint must swallow the 404, evict, and call back."""
+
+    class GoneDB(_FakeDB):
+        def put_face3d_frames(self, person_id, fc, lbac, sv, b64):
+            raise PersonNotFoundError(person_id)
+
+    class ParamRec(_FakeReconstructor):
+        def infer_params(self, frame, bbox, kps=None):
+            return np.random.randn(PARAMS_DIM)
+
+    acc = Face3DAccumulator(min_samples=50, refine_interval=50, max_frames=300)
+    rec = ParamRec()
+    db = GoneDB()
+    pid = "gone2"
+    gone = []
+
+    acc.accumulate(pid, None, None, None, embedding=np.random.randn(EMBEDDING_DIM),
+                   pose=None, quality=1.0, camera_id="c", reconstructor=rec,
+                   db_client=db, on_person_gone=lambda i: gone.append(i))
+
+    assert gone == [pid], f"callback not invoked through accumulate: {gone}"
+    assert pid not in acc._people, "state not evicted through accumulate"
+    print("PASS accumulate swallows 404, evicts, and fires on_person_gone")
+
+
+def test_main_evict_helper_filters_by_value():
+    """Mirror main.py _evict_db_person_id: remove all tracker keys whose VALUE is
+    the gone db id, leaving unrelated mappings intact."""
+    cache = {"trackerA": "db1", "trackerB": "db1", "trackerC": "db2"}
+    db_id = "db1"
+    cache = {k: v for k, v in cache.items() if v != db_id}
+    assert cache == {"trackerC": "db2"}, f"unexpected cache: {cache}"
+    print("PASS db-id eviction filters all tracker keys mapping to the gone id")
+
+
 if __name__ == "__main__":
     test_pack_unpack_roundtrip()
     test_bin_balanced_eviction()
@@ -180,4 +245,7 @@ if __name__ == "__main__":
     test_single_bin_builds()
     test_nan_pose_builds()
     test_build_failure_leaves_counter()
+    test_person_gone_evicts_and_calls_back()
+    test_person_gone_via_accumulate_never_raises()
+    test_main_evict_helper_filters_by_value()
     print("\nALL FACE3D STORE TESTS PASSED")

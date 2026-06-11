@@ -13,6 +13,15 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+class PersonNotFoundError(Exception):
+    """Raised when a persistence call targets a person id that no longer exists.
+
+    A person id can vanish when the db-handler auto-merges two persons: the source
+    id is deleted and its data moved into the target. The worker must self-heal by
+    evicting the dead id and re-resolving to the live (merge target) id.
+    """
+
+
 class TraitsDBClient:
     """Client for interacting with reid-db-handler API"""
 
@@ -202,6 +211,8 @@ class TraitsDBClient:
                 'face_model_format': 'glb'
             }
         )
+        if response.status_code == 404:
+            raise PersonNotFoundError(person_id)
         response.raise_for_status()
         result = response.json()
         logger.info(f"Uploaded 3D face model for person {person_id}")
@@ -244,6 +255,8 @@ class TraitsDBClient:
                 'frames_b64': frames_b64
             }
         )
+        if response.status_code == 404:
+            raise PersonNotFoundError(person_id)
         response.raise_for_status()
         return response.json()
 

@@ -24,9 +24,11 @@ import struct
 import zlib
 import logging
 from dataclasses import dataclass
-from typing import Optional, List, Dict, Tuple
+from typing import Optional, List, Dict, Tuple, Callable
 
 import numpy as np
+
+from src.db_client import PersonNotFoundError
 
 logger = logging.getLogger(__name__)
 
@@ -170,6 +172,27 @@ class Face3DAccumulator:
             self._people[person_db_id] = st
         return st
 
+    def evict(self, person_db_id: str) -> None:
+        """Drop a person's in-RAM ring state (after the DB id is gone)."""
+        self._people.pop(person_db_id, None)
+
+    def _handle_person_gone(self, person_db_id: str,
+                            on_person_gone: Optional[Callable[[str], None]]) -> None:
+        """A persistence call hit a 404: the DB id was merged away or deleted.
+
+        Evict the in-RAM ring and notify the caller so the outer
+        tracker-id -> db-id cache is cleared too; the next frame then re-resolves
+        to the live merge-target id via FAISS and rehydrates fresh."""
+        logger.info(
+            f"face3d: person {person_db_id} gone (merged/deleted), evicting")
+        if on_person_gone is not None:
+            try:
+                on_person_gone(person_db_id)
+            except Exception as e:
+                logger.warning(
+                    f"face3d on_person_gone callback failed for {person_db_id}: {e}")
+        self.evict(person_db_id)
+
     # ------------------------------------------------------------------
     # Rehydration
     # ------------------------------------------------------------------
@@ -299,7 +322,8 @@ class Face3DAccumulator:
     # Build
     # ------------------------------------------------------------------
 
-    def maybe_build(self, person_db_id: str, reconstructor, db_client) -> bool:
+    def maybe_build(self, person_db_id: str, reconstructor, db_client,
+                    on_person_gone: Optional[Callable[[str], None]] = None) -> bool:
         """Best-effort build on the fixed cadence. Returns True on a successful build.
 
         Triggers when frame_count >= min_samples and
@@ -333,6 +357,9 @@ class Face3DAccumulator:
                 result_3d["vertices"], result_3d["faces"],
                 vertex_colors=result_3d.get("vertex_colors"))
             db_client.update_person_face3d(person_db_id, glb_bytes)
+        except PersonNotFoundError:
+            self._handle_person_gone(person_db_id, on_person_gone)
+            return False
         except Exception as e:
             logger.error(
                 f"3D face upload failed for person {person_db_id}: {e}")
@@ -343,14 +370,15 @@ class Face3DAccumulator:
             f"3D face built/refined for person {person_db_id} "
             f"({len(selected)} frames, {bins} bins) from {st.frame_count} accumulated")
         st.last_built_at_count = st.frame_count
-        self.persist(person_db_id, db_client, force=True)
+        self.persist(person_db_id, db_client, force=True, on_person_gone=on_person_gone)
         return True
 
     # ------------------------------------------------------------------
     # Persist
     # ------------------------------------------------------------------
 
-    def persist(self, person_db_id: str, db_client, force: bool = False) -> None:
+    def persist(self, person_db_id: str, db_client, force: bool = False,
+                on_person_gone: Optional[Callable[[str], None]] = None) -> None:
         """PUT the packed blob, debounced to every persist_every adds (or forced)."""
         st = self._state(person_db_id)
         if db_client is None:
@@ -364,6 +392,8 @@ class Face3DAccumulator:
                 person_db_id, st.frame_count, st.last_built_at_count,
                 SCHEMA_VERSION, frames_b64)
             st.adds_since_persist = 0
+        except PersonNotFoundError:
+            self._handle_person_gone(person_db_id, on_person_gone)
         except Exception as e:
             logger.warning(
                 f"face3d persist PUT failed for {person_db_id}: {e}")
@@ -374,7 +404,8 @@ class Face3DAccumulator:
 
     def accumulate(self, person_db_id: str, frame, bbox, kps,
                    embedding, pose, quality: float, camera_id: str,
-                   reconstructor, db_client) -> None:
+                   reconstructor, db_client,
+                   on_person_gone: Optional[Callable[[str], None]] = None) -> None:
         """One-call hook: infer params, add a record, maybe build, persist (debounced).
 
         Skips the frame entirely (no record, no count) when infer_params returns None.
@@ -391,9 +422,10 @@ class Face3DAccumulator:
             roll = pose.roll if pose is not None else None
             self.add(person_db_id, embedding, yaw, pitch, roll,
                      float(quality), camera_id, params)
-            built = self.maybe_build(person_db_id, reconstructor, db_client)
+            built = self.maybe_build(person_db_id, reconstructor, db_client,
+                                     on_person_gone=on_person_gone)
             if not built:
-                self.persist(person_db_id, db_client)
+                self.persist(person_db_id, db_client, on_person_gone=on_person_gone)
         except Exception as e:
             logger.error(
                 f"face3d accumulate failed for person {person_db_id}: {e}")

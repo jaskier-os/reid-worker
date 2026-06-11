@@ -1012,6 +1012,7 @@ class UnifiedReIDSystem:
                                 quality=float(bbox[4]), camera_id=str(source_id),
                                 reconstructor=self.face3d_reconstructor,
                                 db_client=self.db_client,
+                                on_person_gone=self._evict_db_person_id,
                             )
 
                     x1, y1, x2, y2, conf = bbox
@@ -1226,6 +1227,15 @@ class UnifiedReIDSystem:
                     pass
             logger.error(f"Failed to send sighting to database: {e}{detail}")
             raise
+
+    def _evict_db_person_id(self, db_id: str) -> None:
+        """Drop every tracker-id -> db-id cache entry pointing at a gone DB id.
+
+        Called when the accumulator reports a 404 (person merged away or deleted).
+        More than one tracker id can map to the same db id, so we filter by VALUE.
+        The next frame re-resolves the tracker id to the live merge-target id."""
+        self._db_person_id_cache = {
+            k: v for k, v in self._db_person_id_cache.items() if v != db_id}
 
     def _resolve_db_person_id(self, tracker_person_id: str):
         """Map a PersonTracker id to the persistent DB person id.
