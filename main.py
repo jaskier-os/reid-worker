@@ -1957,8 +1957,12 @@ def identify_person():
         snapshot_path=snapshot_url, face_trait_id=trait['id']
     )
 
-    person = db.get_person(db_person_id)
-
+    # Use the person dict returned by find_or_create_person above rather than
+    # re-fetching by id. A re-fetch races with the auto-merge that create_trait
+    # queues: the just-created person can be merged into a lookalike and its id
+    # deleted before we read it back, which 404s and 500s the whole identify.
+    person = dict(person_data)
+    person.pop('created', None)
     # Strip binary data from response
     person.pop('face_model_3d', None)
     return jsonify({
