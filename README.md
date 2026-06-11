@@ -1,5 +1,7 @@
 # reid-worker
 
+> **Docs & wiki:** [github.com/jaskier-os/docs/wiki](https://github.com/jaskier-os/docs/wiki)
+
 Multi-camera person re-identification. Runs face recognition (SCRFD detect +
 ArcFace embed) and optional gait (OpenGait), matches against a FAISS index, and
 persists results through the reid-db-handler HTTP API. It never touches the
