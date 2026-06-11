@@ -89,6 +89,21 @@ device = cuda
 # Output format (glb or gltf)
 output_format = glb
 
+# Frames accumulated before the first best-effort 3D build
+min_samples = 50
+
+# Rebuild step: rebuild every this many additional frames (50/100/.../max_frames)
+refine_interval = 50
+
+# Retained per-person frame ring AND hard ceiling. Bin-balanced eviction keeps
+# yaw diversity once full. frame_count keeps counting past this as a lifetime
+# cadence counter.
+max_frames = 300
+
+# Yaw bin width (degrees) used only as a selection/eviction diversity hint.
+# NOT a build gate: builds never block on yaw-bin coverage.
+yaw_bin_width = 30
+
 [performance]
 # Process every Nth frame (frame skip for performance)
 # 1 = process every frame (slowest, most accurate)

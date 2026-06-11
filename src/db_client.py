@@ -207,6 +207,46 @@ class TraitsDBClient:
         logger.info(f"Uploaded 3D face model for person {person_id}")
         return result
 
+    def get_face3d_frames(self, person_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Fetch the persisted 3D-frame accumulation blob for a person.
+
+        Returns the dict {person_id, frame_count, last_built_at_count,
+        schema_version, frames_b64} or None if none exists yet (404).
+        """
+        response = self.session.get(
+            f"{self.api_url}/api/persons/{person_id}/face3d-frames"
+        )
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        return response.json()
+
+    def put_face3d_frames(
+        self,
+        person_id: str,
+        frame_count: int,
+        last_built_at_count: int,
+        schema_version: int,
+        frames_b64: str
+    ) -> Dict[str, Any]:
+        """
+        Upsert the persisted 3D-frame accumulation blob for a person.
+
+        The worker owns the packed/compressed blob; the db-handler just stores it.
+        """
+        response = self.session.put(
+            f"{self.api_url}/api/persons/{person_id}/face3d-frames",
+            json={
+                'frame_count': int(frame_count),
+                'last_built_at_count': int(last_built_at_count),
+                'schema_version': int(schema_version),
+                'frames_b64': frames_b64
+            }
+        )
+        response.raise_for_status()
+        return response.json()
+
     def create_trait(
         self,
         person_id: str,

@@ -52,6 +52,7 @@ from src.sighting_aggregator import SightingAggregator, SightingData
 from src.db_client import TraitsDBClient
 from src.remote_face_db import create_face_database
 from src.head_pose import estimate_head_pose
+from src.face3d_store import Face3DAccumulator
 from models.scrfd import SCRFD
 from models.arcface import ArcFace
 from models.antispoof import AntiSpoof
@@ -88,14 +89,6 @@ class PersonTracker:
         self.recently_disappeared = {}
         self.last_sighting_sent_at = {}  # person_id -> datetime of last DB sighting
 
-    def count_distinct_angle_bins(self, person_id: str, bin_width: float) -> int:
-        """Count distinct yaw bins covered by collected poses for this person."""
-        poses = self.persons.get(person_id, {}).get('poses', [])
-        if not poses:
-            return 0
-        bins = set(int(y // bin_width) for y in poses)
-        return len(bins)
-
     def remove_person(self, person_id: str):
         """Remove a person from in-memory tracking (e.g. after deletion from DB)."""
         with self.lock:
@@ -104,8 +97,7 @@ class PersonTracker:
             self.last_sighting_sent_at.pop(person_id, None)
 
     def find_or_create_person(self, embedding: np.ndarray, camera_id,
-                              bbox: tuple, db, similarity_threshold: float = 0.4,
-                              pose_yaw: Optional[float] = None) -> str:
+                              bbox: tuple, db, similarity_threshold: float = 0.4) -> str:
         """Find existing person or create new one"""
         current_time = datetime.now()
 
@@ -169,8 +161,6 @@ class PersonTracker:
                         person_id = str(uuid.uuid4())[:8]
                         self.persons[person_id] = {
                             'embeddings': [],
-                            'poses': [],
-                            'face3d_params': [],
                             'sightings': [],
                             'known': False,
                             'created_at': datetime.now()
@@ -180,16 +170,12 @@ class PersonTracker:
             if person_id not in self.persons:
                 self.persons[person_id] = {
                     'embeddings': [],
-                    'poses': [],
-                    'face3d_params': [],
                     'sightings': [],
                     'known': True,
                     'created_at': datetime.now()
                 }
 
             self.persons[person_id]['embeddings'].append(embedding)
-            if pose_yaw is not None:
-                self.persons[person_id]['poses'].append(pose_yaw)
             self.persons[person_id]['sightings'].append({
                 'camera_id': camera_id,
                 'bbox': bbox,
@@ -197,11 +183,9 @@ class PersonTracker:
             })
 
             # Cap in-memory data to prevent unbounded growth
-            MAX_EMBEDDINGS, MAX_POSES, MAX_SIGHTINGS = 100, 500, 50
+            MAX_EMBEDDINGS, MAX_SIGHTINGS = 100, 50
             if len(self.persons[person_id]['embeddings']) > MAX_EMBEDDINGS:
                 self.persons[person_id]['embeddings'] = self.persons[person_id]['embeddings'][-MAX_EMBEDDINGS:]
-            if len(self.persons[person_id]['poses']) > MAX_POSES:
-                self.persons[person_id]['poses'] = self.persons[person_id]['poses'][-MAX_POSES:]
             if len(self.persons[person_id]['sightings']) > MAX_SIGHTINGS:
                 self.persons[person_id]['sightings'] = self.persons[person_id]['sightings'][-MAX_SIGHTINGS:]
 
@@ -704,9 +688,9 @@ class UnifiedReIDSystem:
         self.face3d_device = self.config.get('face_3d', 'device', fallback='cuda')
         self.face3d_format = self.config.get('face_3d', 'output_format', fallback='glb')
         self.face3d_min_samples = self.config.getint('face_3d', 'min_samples', fallback=50)
-        self.face3d_min_angle_bins = self.config.getint('face_3d', 'min_angle_bins', fallback=3)
         self.face3d_yaw_bin_width = self.config.getfloat('face_3d', 'yaw_bin_width', fallback=30.0)
         self.face3d_refine_interval = self.config.getint('face_3d', 'refine_interval', fallback=50)
+        self.face3d_max_frames = self.config.getint('face_3d', 'max_frames', fallback=300)
 
         # Performance settings
         self.process_interval = self.config.getfloat('performance', 'process_interval', fallback=0.1)
@@ -770,8 +754,15 @@ class UnifiedReIDSystem:
 
         # Cached 3D reconstruction result for debug visualization
         self._last_face3d = None
-        # Tracks param count at last 3D rebuild per person (no entry = never built)
-        self._face3d_last_count = {}
+        # Persistent, traceable 3D-frame accumulator (keyed on the DB person id).
+        self.face3d_accumulator = Face3DAccumulator(
+            min_samples=self.face3d_min_samples,
+            refine_interval=self.face3d_refine_interval,
+            max_frames=self.face3d_max_frames,
+            yaw_bin_width=self.face3d_yaw_bin_width,
+        )
+        # Cache: tracker external person id -> persistent DB person id.
+        self._db_person_id_cache = {}
 
         # Start background thread for DB sending (auto-restarts on crash)
         self.db_flush_thread = threading.Thread(
@@ -996,68 +987,25 @@ class UnifiedReIDSystem:
                     # Find or create person
                     person_id, just_registered = self.tracker.find_or_create_person(
                         embedding, source_id, bbox, self.face_db,
-                        similarity_threshold=self.similarity_threshold,
-                        pose_yaw=pose.yaw if pose is not None else None
+                        similarity_threshold=self.similarity_threshold
                     )
 
-                    # Accumulate raw 3DDFA params on every detected frame indefinitely.
-                    # Never stop — more frames always improve the shape average (noise ~ 1/√N).
-                    if (self.face3d_reconstructor
-                            and person_id in self.tracker.persons):
-                        raw_params = self.face3d_reconstructor.infer_params(frame, bbox, kps=kp)
-                        if raw_params is not None:
-                            self.tracker.persons[person_id]['face3d_params'].append(raw_params)
-                            if len(self.tracker.persons[person_id]['face3d_params']) > 500:
-                                self.tracker.persons[person_id]['face3d_params'] = \
-                                    self.tracker.persons[person_id]['face3d_params'][-500:]
-
-                    # Build / refine 3D mesh:
-                    #   - First build: requires face3d_min_samples + face3d_min_angle_bins
-                    #   - Subsequent rebuilds: every face3d_refine_interval additional frames
-                    if self.face3d_reconstructor and person_id in self.tracker.persons:
-                        emb_count = len(self.tracker.persons[person_id]['embeddings'])
-                        param_count = len(self.tracker.persons[person_id]['face3d_params'])
-                        angle_bins = self.tracker.count_distinct_angle_bins(
-                            person_id, self.face3d_yaw_bin_width
-                        )
-                        last_count = self._face3d_last_count.get(person_id, 0)
-                        never_built = last_count == 0
-                        initial_ready = (
-                            never_built
-                            and emb_count >= self.face3d_min_samples
-                            and angle_bins >= self.face3d_min_angle_bins
-                        )
-                        refine_ready = (
-                            not never_built
-                            and param_count >= last_count + self.face3d_refine_interval
-                        )
-
-                        if never_built and emb_count >= self.face3d_min_samples and not initial_ready:
-                            logger.debug(
-                                f"Person {person_id}: {emb_count} samples but only "
-                                f"{angle_bins}/{self.face3d_min_angle_bins} angle bins covered"
+                    # Persistent, traceable 3D-frame accumulation + best-effort build.
+                    # The accumulator keys persistence on the durable DB person id (the
+                    # same id update_person_face3d uses), infers 257-d params, stores a
+                    # record (embedding + pose + params), and builds on the 50-step
+                    # cadence (50/100/.../300, ceiling 300). Best-effort: it never raises
+                    # into the frame loop and never blocks on yaw-bin diversity.
+                    if self.face3d_reconstructor and self.db_client:
+                        db_person_id = self._resolve_db_person_id(person_id)
+                        if db_person_id:
+                            self.face3d_accumulator.accumulate(
+                                db_person_id, frame, bbox, kp,
+                                embedding=embedding, pose=pose,
+                                quality=float(bbox[4]), camera_id=str(source_id),
+                                reconstructor=self.face3d_reconstructor,
+                                db_client=self.db_client,
                             )
-
-                        if initial_ready or refine_ready:
-                            try:
-                                accumulated = self.tracker.persons[person_id]['face3d_params']
-                                result_3d = self.face3d_reconstructor.reconstruct_from_params_list(
-                                    accumulated
-                                )
-                                if result_3d:
-                                    self._face3d_last_count[person_id] = param_count
-                                    logger.info(
-                                        f"3D face {'built' if never_built else 'refined'} "
-                                        f"for person {person_id} ({param_count} frames averaged)"
-                                    )
-                                    if self.debug:
-                                        self._last_face3d = result_3d
-                                        if self.visualizer:
-                                            self.visualizer._face3d_tris = None
-                                    if self.db_client:
-                                        self.db_queue.put(('face3d', person_id, result_3d))
-                            except Exception as e:
-                                logger.error(f"Failed 3D face reconstruction: {e}")
 
                     x1, y1, x2, y2, conf = bbox
                     face_bbox = (int(x1), int(y1), int(x2), int(y2))
@@ -1272,17 +1220,26 @@ class UnifiedReIDSystem:
             logger.error(f"Failed to send sighting to database: {e}{detail}")
             raise
 
-    def _send_face3d_to_db(self, person_id: str, result_3d: dict):
-        """Convert 3D reconstruction to GLB and upload to database"""
-        glb_bytes = Face3DReconstructor.to_glb_bytes(
-            result_3d['vertices'], result_3d['faces'],
-            vertex_colors=result_3d.get('vertex_colors')
-        )
-        person_data = self.db_client.find_or_create_person(
-            external_id=person_id
-        )
-        self.db_client.update_person_face3d(person_data['id'], glb_bytes)
-        logger.info(f"3D face model uploaded for person {person_id}")
+    def _resolve_db_person_id(self, tracker_person_id: str):
+        """Map a tracker external person id to the persistent DB person id.
+
+        Resolves via find_or_create_person by external_id (the same id
+        update_person_face3d uses) and caches the result so the 3D accumulator can key
+        persistence on the durable id without a DB round-trip per frame. Returns
+        None on failure (best-effort; the frame is simply not accumulated)."""
+        cached = self._db_person_id_cache.get(tracker_person_id)
+        if cached:
+            return cached
+        try:
+            person_data = self.db_client.find_or_create_person(
+                external_id=tracker_person_id)
+            db_id = person_data['id']
+            self._db_person_id_cache[tracker_person_id] = db_id
+            return db_id
+        except Exception as e:
+            logger.warning(
+                f"Could not resolve DB person id for {tracker_person_id}: {e}")
+            return None
 
     def _persist_to_disk(self, item):
         """Save a failed queue item to disk for later retry"""
@@ -1314,11 +1271,7 @@ class UnifiedReIDSystem:
 
     def _dispatch_item(self, item):
         """Send a single queue item to DB. Raises on failure."""
-        if isinstance(item, tuple) and item[0] == 'face3d':
-            _, person_id, result_3d = item
-            self._send_face3d_to_db(person_id, result_3d)
-        else:
-            self._send_sighting_to_db(item)
+        self._send_sighting_to_db(item)
 
     def _db_flush_worker(self):
         """Background worker that sends all queued items to DB.
