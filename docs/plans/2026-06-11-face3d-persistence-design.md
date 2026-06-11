@@ -42,6 +42,43 @@ starts from zero.
 - Fixing the missing CUDA (`libcudnn.so.9`) -- runs CPU, acceptable.
 - Body/gait 3D -- face only (3DDFA/deep3d) exists.
 
+## Ingestion routing (decided: A -- dual-call)
+
+Audit finding: the phone routes ALL ReID through reid-analytics
+(`searchByPhoto` -> analytics `POST /api/v1/reid/persons/search/photo` ->
+reidService.js:283 -> worker `POST /api/identify`). The worker stream endpoint
+`/api/streams/<id>/frame` is called nowhere, so the 3D accumulator (which lives
+only on the stream path) is never fed. `/frame` and `/identify` are NOT
+interchangeable: `/identify` returns `{person, match, face_bbox}` synchronously
+(what the glasses need, consumed at reidService.js:292-300 + relayed via
+`sendReidResult`), while `/frame` is fire-and-forget and returns only
+`{status, stream_id, frame_count}` (recognition happens later, async).
+
+Decision: **dual-call in reid-analytics**. For each continuous-recognition frame,
+`reidService.searchByPhoto` calls BOTH worker endpoints:
+- `POST /api/identify` -- unchanged; returns the recognition the caller relays back.
+- `POST /api/streams/<stream_id>/frame` -- NEW; feeds the 3D accumulator.
+
+stream_id: analytics-derived, stable per source. Use a fixed/default id (e.g.
+`analytics-reid`) unless the request carries a camera/device id, in which case use
+`reid-<deviceId>`. The accumulator keys persistence on the resolved persistent
+person_id (via FAISS), NOT the stream_id, so stream_id only needs to keep the
+stream-loop session alive; exact value is not load-bearing for persistence.
+
+The `/frame` call is best-effort: failures/timeouts must NOT block or fail the
+`/identify` response (fire-and-forget, short timeout, swallow errors + log). The
+extra call double-extracts one embedding on the worker; acceptable vs the 3D cost.
+
+The `/api/identify` handler ALSO gets the shared accumulator hook (so identify-only
+traffic still accumulates), per the Accumulator section. With dual-call, a given
+frame may reach the accumulator via both `/frame` and `/identify`; dedupe is NOT
+required (more frames only improve the average), but to avoid double-counting the
+same physical frame, only the STREAM path accumulates when a request arrives on both
+-- i.e. `/identify` accumulates only when not part of a dual-call. Simplest
+acceptable rule: accumulate on `/frame` always; accumulate on `/identify` always
+too -- duplicates are harmless to shape averaging and keep the paths independent.
+(Chosen: keep both independent; do not add cross-path dedupe.)
+
 ## Storage (reid-db-handler)
 
 New dedicated collection, ONE compressed document PER PERSON (not per frame):
