@@ -69,15 +69,18 @@ The `/frame` call is best-effort: failures/timeouts must NOT block or fail the
 `/identify` response (fire-and-forget, short timeout, swallow errors + log). The
 extra call double-extracts one embedding on the worker; acceptable vs the 3D cost.
 
-The `/api/identify` handler ALSO gets the shared accumulator hook (so identify-only
-traffic still accumulates), per the Accumulator section. With dual-call, a given
-frame may reach the accumulator via both `/frame` and `/identify`; dedupe is NOT
-required (more frames only improve the average), but to avoid double-counting the
-same physical frame, only the STREAM path accumulates when a request arrives on both
--- i.e. `/identify` accumulates only when not part of a dual-call. Simplest
-acceptable rule: accumulate on `/frame` always; accumulate on `/identify` always
-too -- duplicates are harmless to shape averaging and keep the paths independent.
-(Chosen: keep both independent; do not add cross-path dedupe.)
+Accumulation hook placement (avoid double-feed): because the analytics layer
+dual-calls BOTH `/frame` and `/identify` with the SAME physical frame, accumulating
+on both paths would count each frame twice and corrupt the 50-step cadence (build at
+"50" after only ~25 real frames). Therefore:
+
+- `/api/streams/<id>/frame` is the SOLE 3D accumulator feeder.
+- `/api/identify` does NOT accumulate -- it stays a pure one-shot lookup returning
+  `{person, match, face_bbox}` unchanged.
+
+The accumulator is still written as a reusable class, but for now it is wired only
+into the stream path. (The catalog's interactive identify is a one-shot lookup and
+should not dump arbitrary catalogue photos into the 3D ring anyway.)
 
 ## Storage (reid-db-handler)
 
