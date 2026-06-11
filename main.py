@@ -1228,15 +1228,30 @@ class UnifiedReIDSystem:
             raise
 
     def _resolve_db_person_id(self, tracker_person_id: str):
-        """Map a tracker external person id to the persistent DB person id.
+        """Map a PersonTracker id to the persistent DB person id.
 
-        Resolves via find_or_create_person by external_id (the same id
-        update_person_face3d uses) and caches the result so the 3D accumulator can key
-        persistence on the durable id without a DB round-trip per frame. Returns
-        None on failure (best-effort; the frame is simply not accumulated)."""
+        The tracker id can be EITHER an external_id (normal stream-only person,
+        an 8-char tag) OR an already-durable DB id (when the face was first seen
+        via /api/identify, which seeds FAISS so a later stream hit returns the DB
+        id as the FAISS name). So we must not blindly treat it as an external_id:
+        that would find_or_create a brand-new bogus person whose external_id is
+        another person's DB id, and the 3D accumulator would never stabilize.
+
+        Resolution order: if the id is already a DB person (get_person resolves),
+        use it as-is; otherwise treat it as an external_id and find-or-create.
+        Cached so the accumulator keys on the durable id without a per-frame DB
+        round-trip. Returns None on failure (best-effort; frame not accumulated)."""
         cached = self._db_person_id_cache.get(tracker_person_id)
         if cached:
             return cached
+        # Already a durable DB id? (identify-seeded faces resolve here.)
+        try:
+            self.db_client.get_person(tracker_person_id)
+            self._db_person_id_cache[tracker_person_id] = tracker_person_id
+            return tracker_person_id
+        except Exception:
+            pass
+        # Otherwise it is an external_id (stream-only person).
         try:
             person_data = self.db_client.find_or_create_person(
                 external_id=tracker_person_id)
@@ -1934,11 +1949,15 @@ def identify_person():
         return jsonify({'error': 'Database not configured'}), 503
 
     if is_new:
-        person_data = db.find_or_create_person(
-            external_id=str(uuid.uuid4())[:8]
-        )
+        external_id = str(uuid.uuid4())[:8]
+        person_data = db.find_or_create_person(external_id=external_id)
         db_person_id = person_data['id']
-        reid_system.face_db.add_face(embedding, db_person_id)
+        # Key FAISS by external_id, NOT the DB id. The stream path keys FAISS by
+        # external_id too (PersonTracker returns matched_name = the FAISS name),
+        # so both ingestion paths must agree. Keying by the DB id here made the
+        # stream path resolve a DB id as if it were an external_id and double-
+        # create a bogus person every frame, so 3D accumulation never stabilized.
+        reid_system.face_db.add_face(embedding, person_data.get('external_id', external_id))
     else:
         person_data = db.find_or_create_person(external_id=matched_name)
         db_person_id = person_data['id']
