@@ -30,8 +30,9 @@ py7zr==1.0.0
 # Person Detection
 ultralytics>=8.0.0  # YOLOv8 for full person detection
 
-# 3D Mesh Export
-trimesh==4.0.0
+# 3D Mesh Export. 4.5.x is required for NumPy 2 (>=2.2.6 above): trimesh 4.0.0
+# still calls the removed ndarray.ptp() during GLB export and crashes every build.
+trimesh==4.5.3
 
 # 3D face weight download (used by scripts/setup_deep3d.py)
 huggingface_hub==0.26.2
