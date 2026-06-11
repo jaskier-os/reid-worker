@@ -104,6 +104,12 @@ max_frames = 300
 # NOT a build gate: builds never block on yaw-bin coverage.
 yaw_bin_width = 30
 
+# Persist accumulated frames after this many adds per person. 1 = persist every
+# frame so progress is durable when frames arrive as sparse one-shot pushes and
+# the stream session is reaped between them (and across pod restarts). Raise to
+# batch DB writes at the risk of losing the un-persisted tail on a crash.
+persist_every = 1
+
 [performance]
 # Process every Nth frame (frame skip for performance)
 # 1 = process every frame (slowest, most accurate)

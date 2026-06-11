@@ -691,6 +691,12 @@ class UnifiedReIDSystem:
         self.face3d_yaw_bin_width = self.config.getfloat('face_3d', 'yaw_bin_width', fallback=30.0)
         self.face3d_refine_interval = self.config.getint('face_3d', 'refine_interval', fallback=50)
         self.face3d_max_frames = self.config.getint('face_3d', 'max_frames', fallback=300)
+        # Persist after this many accumulated frames per person. 1 = persist every
+        # frame, so progress is durable even when the stream is fed as sparse
+        # one-shot pushes (analytics dual-call) and the stream session is reaped
+        # between frames. Higher values batch DB writes at the risk of losing the
+        # un-persisted tail on a crash.
+        self.face3d_persist_every = self.config.getint('face_3d', 'persist_every', fallback=1)
 
         # Performance settings
         self.process_interval = self.config.getfloat('performance', 'process_interval', fallback=0.1)
@@ -760,6 +766,7 @@ class UnifiedReIDSystem:
             refine_interval=self.face3d_refine_interval,
             max_frames=self.face3d_max_frames,
             yaw_bin_width=self.face3d_yaw_bin_width,
+            persist_every=self.face3d_persist_every,
         )
         # Cache: tracker external person id -> persistent DB person id.
         self._db_person_id_cache = {}

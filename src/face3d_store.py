@@ -154,7 +154,7 @@ class Face3DAccumulator:
 
     def __init__(self, min_samples: int = 50, refine_interval: int = 50,
                  max_frames: int = 300, yaw_bin_width: float = 30.0,
-                 persist_every: int = 10):
+                 persist_every: int = 1):
         self.min_samples = int(min_samples)
         self.refine_interval = int(refine_interval)
         self.max_frames = int(max_frames)
